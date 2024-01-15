@@ -17,7 +17,7 @@ class PotentialFieldPlanner(Node):
 
         # Logging
         self.verbose = True
-        '''Just Testing commit'''
+        '''Just Testing commit for submodule'''
 
         # Setting up buffer and transform listener
         self.tf_buffer = tf2_ros.Buffer()
