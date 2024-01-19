@@ -11,7 +11,7 @@ import tf2_geometry_msgs
 import numpy as np
 
 
-class PotentialFieldPlanner(Node):
+class ExploringPotentialFieldPlanner(Node):
     def __init__(self, userInput=False):        
         super().__init__(node_name="pf_planner")
 
@@ -359,7 +359,7 @@ class PotentialFieldPlanner(Node):
 def main(args=None)-> None:
     rclpy.init(args=args)
 
-    node = PotentialFieldPlanner(userInput=False)
+    node = ExploringPotentialFieldPlanner(userInput=False)
 
     rclpy.spin(node)
     rclpy.shutdown()
