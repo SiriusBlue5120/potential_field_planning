@@ -21,7 +21,6 @@ setup(
     entry_points={
         'console_scripts': [
             'pf_planner = potential_field_planning.pf_planner:main',
-            'pf_exploration_planner = potential_field_planning.pf_exploration_planner:main',
         ],
     },
 )
