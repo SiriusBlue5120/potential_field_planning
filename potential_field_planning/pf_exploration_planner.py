@@ -133,6 +133,24 @@ class ExploringPotentialFieldPlanner(Node):
         return
 
 
+    def generatePoseToExplore(self):
+        '''
+        TODO: 
+        Sample a random unexplored map cell 
+        Check if there are free cells within some distance threshold, if so, accept
+        Need exploration termination condition - detect closed outer boundary
+        '''
+
+        self.goal = self.set_posestamped(
+                        PoseStamped(),
+                        [0.0, 0.0, 0.0], 
+                        [0.0, 0.0, 0.0],
+                        self.world_frame
+                        )
+
+        return self.goal
+
+
     def convert_scan_to_cartesian(self, scan_ranges:LaserScan.ranges):
         '''
         Converts scan point to the cartesian coordinate system
