@@ -27,6 +27,7 @@ class ExploringPotentialFieldPlanner(Node):
         self.world_frame = 'odom'
 
         # Robot position
+        # Robot is at origin in its own frame
         self.robot_pose = self.set_posestamped(
                         PoseStamped(),
                         [0.0, 0.0, 0.0], 
@@ -133,7 +134,7 @@ class ExploringPotentialFieldPlanner(Node):
         return
 
 
-    def generatePoseToExplore(self):
+    def generate_pose_to_explore(self):
         '''
         TODO: 
         Sample a random unexplored map cell 
@@ -352,7 +353,7 @@ class ExploringPotentialFieldPlanner(Node):
                 self.get_logger().info(f"goal heading error: {goal_heading}")
 
             if np.abs(goal_heading) > self.angle_threshold:
-                self.vel_command.angular.z = self.max_angular_vel * \
+                self.vel_command.angulreturnar.z = self.max_angular_vel * \
                                         np.sign(goal_heading)
             else:
                 self.vel_command.angular.z = 0.0
