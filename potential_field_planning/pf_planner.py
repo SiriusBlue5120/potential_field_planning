@@ -340,12 +340,34 @@ class PotentialFieldPlanner(Node):
 
         self.vel_publisher.publish(self.vel_command)
 
+    
+    def send_zero_velocity(self):
+        self.vel_command.linear.x = 0.0
+        self.vel_command.linear.y = 0.0
+        self.vel_command.linear.z = 0.0
+
+        self.vel_command.angular.x = 0.0
+        self.vel_command.angular.y = 0.0
+        self.vel_command.angular.z = 0.0
+
+        self.vel_publisher.publish(self.vel_command)
+
 
 
 def main(args=None)-> None:
     rclpy.init(args=args)
 
     node = PotentialFieldPlanner(userInput=False)
+
+    try:
+        while rclpy.ok():
+            rclpy.spin_once(node)
+
+    except KeyboardInterrupt:
+        node.send_zero_velocity()
+
+    finally:
+        rclpy.shutdown()
 
     rclpy.spin(node)
     rclpy.shutdown()
