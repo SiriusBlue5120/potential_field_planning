@@ -2,7 +2,7 @@ import rclpy
 from rclpy.node import Node
 # importa el "tipo de mensaje" 
 # 1)ros2 interface list |grep String;ros2 interface show std_msgs/msg/String
-from geometry_msgs.msg import Twist, PoseStamped, TransformStamped
+from geometry_msgs.msg import Twist, PoseStamped, TransformStamped, PoseWithCovarianceStamped
 from nav_msgs.msg import Path
 from sensor_msgs.msg import LaserScan
 import tf2_ros
@@ -16,6 +16,9 @@ class PotentialFieldPlanner(Node):
     def __init__(self, userInput=False, usePlan=True):        
         super().__init__(node_name="pf_planner")
 
+        # Path source
+        self.usePlan = usePlan
+
         # Logging
         self.verbose = True
 
@@ -25,7 +28,7 @@ class PotentialFieldPlanner(Node):
 
         # Set frames
         self.robot_frame = 'base_link'
-        self.world_frame = 'odom'
+        self.world_frame = 'map' if usePlan else 'odom'
 
         # Robot position
         self.robot_pose = self.set_posestamped(
@@ -79,15 +82,20 @@ class PotentialFieldPlanner(Node):
         self.laser_cartesian_info = {}
 
         # Path subscriber
-        self.usePlan = usePlan
-        if self.usePlan:
-            self.plan_subscriber = self.create_subscription(
-                Path,
-                "/plan",
-                self.plan_callback,
-                10
-            )
+        self.plan_subscriber = self.create_subscription(
+            Path,
+            "/plan",
+            self.plan_callback,
+            10
+        ) if self.usePlan else None
         self.plan: np.ndarray
+
+        self.pose_subscriber = self.create_subscription(
+            PoseWithCovarianceStamped,
+            "/pose",
+            self.pose_callback,
+            10
+        ) if self.usePlan else None
 
         ### TODO: Define states ###
         self.IDLE = 0
@@ -116,6 +124,13 @@ class PotentialFieldPlanner(Node):
             self.plan[index, 0] = pose.pose.position.x
             self.plan[index, 1] = pose.pose.position.y
             self.plan[index, 2] = 0.0
+
+        return
+    
+
+    def pose_callback(self, msg):
+
+        
 
         return
 
