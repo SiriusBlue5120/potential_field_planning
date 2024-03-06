@@ -3,6 +3,7 @@ from rclpy.node import Node
 # importa el "tipo de mensaje" 
 # 1)ros2 interface list |grep String;ros2 interface show std_msgs/msg/String
 from geometry_msgs.msg import Twist, PoseStamped, TransformStamped
+from nav_msgs.msg import Path
 from sensor_msgs.msg import LaserScan
 import tf2_ros
 import tf_transformations as tf
@@ -12,12 +13,11 @@ import numpy as np
 
 
 class PotentialFieldPlanner(Node):
-    def __init__(self, userInput=False):        
+    def __init__(self, userInput=False, usePlan=True):        
         super().__init__(node_name="pf_planner")
 
         # Logging
         self.verbose = True
-        '''Just Testing commit for submodule'''
 
         # Setting up buffer and transform listener
         self.tf_buffer = tf2_ros.Buffer()
@@ -78,6 +78,17 @@ class PotentialFieldPlanner(Node):
         self.laser_info= {}
         self.laser_cartesian_info = {}
 
+        # Path subscriber
+        self.usePlan = usePlan
+        if self.usePlan:
+            self.plan_subscriber = self.create_subscription(
+                Path,
+                "/plan",
+                self.plan_callback,
+                10
+            )
+        self.plan: np.ndarray
+
         ### TODO: Define states ###
         self.IDLE = 0
         self.INIT = 1
@@ -91,6 +102,22 @@ class PotentialFieldPlanner(Node):
         self.k_a = 1.0
         self.k_r = 0.1
         self.repulsor_threshold = 8.0
+
+
+    def plan_callback(self, msg: Path):
+        plan_length = len(msg.poses)
+
+        # Each pose is x, y, theta
+        # Theta may be ignored here though
+        self.plan = np.zeros((plan_length, 3))
+
+        for index, pose in enumerate(msg.poses):
+            # pose: PoseStamped
+            self.plan[index, 0] = pose.pose.position.x
+            self.plan[index, 1] = pose.pose.position.y
+            self.plan[index, 2] = 0.0
+
+        return
 
 
     def process_scan(self, msg:LaserScan):
