@@ -7,6 +7,7 @@ from nav_msgs.msg import Path
 from sensor_msgs.msg import LaserScan
 import tf2_ros
 import tf_transformations as tf
+from tf_transformations import quaternion_matrix, euler_matrix
 from tf_transformations import euler_from_quaternion, quaternion_from_euler
 import tf2_geometry_msgs
 import numpy as np
@@ -29,22 +30,24 @@ class PotentialFieldPlanner(Node):
         # Set frames
         self.robot_frame = 'base_link'
         self.world_frame = 'map' if usePlan else 'odom'
+        self.robot_offset = np.zeros(3)
 
         # Robot position
         self.robot_pose = self.set_posestamped(
                         PoseStamped(),
                         [0.0, 0.0, 0.0], 
                         [0.0, 0.0, 0.0],
-                        self.robot_frame
+                        self.world_frame
                         )
 
         # Twist command
         self.vel_command = Twist()
 
         # Linear velocity limits
-        self.max_angular_vel = 1
-        self.max_linear_vel = 1
+        self.max_angular_vel = 0.8
+        self.max_linear_vel = 0.5
         # self.creep_velocity = 0.25
+        self.SLOW_DOWN_DISTANCE = 1.0
 
         # Angular velocity limits
         self.angle_threshold = 0.05
@@ -52,16 +55,16 @@ class PotentialFieldPlanner(Node):
 
         # Set input goal wrt world_frame (odom)
         if userInput:
-            pose_robile = [float(x) for x in \
+            goal_pose_world = [float(x) for x in \
                            input('Enter a pose as (x, y, theta):').split(',')]
         else:
-            pose_robile = [4.0, 10.0, -1.0]
+            goal_pose_world = [4.0, 10.0, -1.0]
 
-        assert len(pose_robile) == 3
+        assert len(goal_pose_world) == 3
         self.goal = self.set_posestamped(
                         PoseStamped(),
-                        [pose_robile[0], pose_robile[1],            0.0], 
-                        [           0.0,            0.0, pose_robile[2]],
+                        [goal_pose_world[0], goal_pose_world[1],            0.0], 
+                        [           0.0,            0.0, goal_pose_world[2]],
                         self.world_frame
                         )
         
@@ -79,7 +82,6 @@ class PotentialFieldPlanner(Node):
                 10)
         self.lidar_init = False
         self.laser_info= {}
-        self.laser_cartesian_info = {}
 
         # Path subscriber
         self.plan_subscriber = self.create_subscription(
@@ -88,7 +90,8 @@ class PotentialFieldPlanner(Node):
             self.plan_callback,
             10
         ) if self.usePlan else None
-        self.plan: np.ndarray
+        self.plan: np.ndarray = None
+        self.LOOKAHEAD_DISTANCE = 1.5
 
         self.pose_subscriber = self.create_subscription(
             PoseWithCovarianceStamped,
@@ -107,7 +110,7 @@ class PotentialFieldPlanner(Node):
         self.state = self.INIT
 
         # Constants for velocity field planning
-        self.k_a = 1.0
+        self.k_a = 10
         self.k_r = 0.1
         self.repulsor_threshold = 8.0
 
@@ -125,12 +128,24 @@ class PotentialFieldPlanner(Node):
             self.plan[index, 1] = pose.pose.position.y
             self.plan[index, 2] = 0.0
 
+        if self.verbose or False:
+            self.get_logger().info(f"plan of length {self.plan.shape[0]} received")
+
         return
     
 
-    def pose_callback(self, msg):
+    def pose_callback(self, msg:PoseWithCovarianceStamped):
+        self.robot_pose.header.frame_id = msg.header.frame_id
+        self.robot_pose.header.stamp = msg.header.stamp
 
-        
+        self.robot_pose.pose.position.x = msg.pose.pose.position.x
+        self.robot_pose.pose.position.y = msg.pose.pose.position.y
+        self.robot_pose.pose.position.z = msg.pose.pose.position.z
+
+        self.robot_pose.pose.orientation.x = msg.pose.pose.orientation.x
+        self.robot_pose.pose.orientation.y = msg.pose.pose.orientation.y
+        self.robot_pose.pose.orientation.z = msg.pose.pose.orientation.z
+        self.robot_pose.pose.orientation.w = msg.pose.pose.orientation.w
 
         return
 
@@ -154,6 +169,9 @@ class PotentialFieldPlanner(Node):
             )
             self.lidar_init = True
 
+            if self.verbose:
+                self.get_logger().info(f"Laser info obtained: \n{self.laser_info}")
+
         self.scan_ranges = np.array(msg.ranges)
         
         self.scan_cartesian = self.convert_scan_to_cartesian(self.scan_ranges)
@@ -175,9 +193,9 @@ class PotentialFieldPlanner(Node):
         return np.array(scanPoints)
 
 
-    def get_homogenous_transformation(self, transform:TransformStamped):
+    def get_homogeneous_transformation_from_transform(self, transform:TransformStamped):
         '''
-        Return the equivalent homogenous transform of a TransformStamped object
+        Return the equivalent homogeneous transform of a TransformStamped object
         '''
         transformation_matrix = tf.quaternion_matrix([
                                     transform.transform.rotation.x,
@@ -190,14 +208,28 @@ class PotentialFieldPlanner(Node):
         transformation_matrix[2,-1] = transform.transform.translation.z
 
         return transformation_matrix
-
     
+    
+    def get_homogeneous_transform_from_posestamped(self, pose:PoseStamped):
+        transformation_matrix = tf.quaternion_matrix([
+                                        pose.pose.orientation.x,
+                                        pose.pose.orientation.y,
+                                        pose.pose.orientation.z,
+                                        pose.pose.orientation.w,
+                                    ])
+        transformation_matrix[0,-1] = pose.pose.position.x
+        transformation_matrix[1,-1] = pose.pose.position.y
+        transformation_matrix[2,-1] = pose.pose.position.z
+
+        return transformation_matrix
+
+
     def transform_coordinates(self, target_frame, source_frame, points):
         '''
         Transforms points from source frame to target frame
         '''
         transform = self.calculate_transform(target_frame, source_frame)
-        transformation_matrix = self.get_homogenous_transformation(transform)
+        transformation_matrix = self.get_homogeneous_transformation_from_transform(transform)
 
         transformed_points = []
         for point in points:
@@ -224,7 +256,7 @@ class PotentialFieldPlanner(Node):
         transform = self.tf_buffer.lookup_transform(target_frame, source_frame, \
                                                     rclpy.time.Time())
         
-        if self.verbose:
+        if self.verbose and False:
             self.get_logger().info(f"transform btw target {target_frame} and " + \
                                    f"source {source_frame}: {transform}")
 
@@ -265,6 +297,19 @@ class PotentialFieldPlanner(Node):
         ])
 
         return position
+    
+
+    def get_homogeneous_transform(self, position, orientation_euler): 
+        transformation_matrix = tf.euler_matrix(*orientation_euler)
+        transformation_matrix[:-1,-1] = position
+
+        return transformation_matrix
+
+
+    def get_position_from_homogeneous_matrix(self, homogeneous_matrix: np.ndarray):
+        position = homogeneous_matrix[:-1, -1]
+
+        return position
 
 
     def attraction_vel_vect(self, robot_position, goal_position):
@@ -292,20 +337,69 @@ class PotentialFieldPlanner(Node):
             total_repulsive_vel += repulsive_vel.flatten()
 
         return total_repulsive_vel
+
     
+    def get_lookahead_waypoint(self, robot_position, plan):
+        plan_positions = plan[:, :-1]
+        robot_position_2D = robot_position[:-1]
+
+        diffs = plan_positions - robot_position_2D
+        distances = np.linalg.norm(diffs, axis=1)
+        self.get_logger().info(f"distances: {distances}")
+
+        current_index = np.argmin(distances)
+        self.get_logger().info(f"current_index: {current_index}")
+
+        distance_mask = distances[current_index:] > self.LOOKAHEAD_DISTANCE
+        self.get_logger().info(f"distance_mask: {distance_mask}")
+
+        if not np.sum(distance_mask, dtype=np.int64):
+            lookahead_waypoint = plan[-1, :]
+        
+        else:
+            self.get_logger().info(f"condition: {np.argwhere(distances[current_index:] > self.LOOKAHEAD_DISTANCE)}")
+            lookahead_index = np.argwhere(distances[current_index:] > self.LOOKAHEAD_DISTANCE)[0]
+
+            lookahead_waypoint = plan[current_index + lookahead_index]
+
+        return lookahead_waypoint
+
 
     def control_loop(self):
         '''
         Runs the main control loop for the planner
         '''
-        goal_transformed = self.transform_posestamped(self.goal, self.robot_frame)
-        goal_position = self.get_position_from_posestamped(goal_transformed)
-        robot_position = self.get_position_from_posestamped(self.robot_pose)
-        distance_to_goal = np.linalg.norm(goal_position - robot_position)
+        if not self.lidar_init:
+            return
+        
+        if self.usePlan:
+            if self.plan is None:
+                return
+
+            robot_wrt_world_position = self.get_position_from_posestamped(self.robot_pose)
+            robot_wrt_world_homogeneous = \
+                self.get_homogeneous_transform_from_posestamped(self.robot_pose)
+            world_wrt_robot_homogeneous = np.linalg.pinv(robot_wrt_world_homogeneous)
+
+            goal_wrt_world_position = self.get_lookahead_waypoint(robot_wrt_world_position, self.plan)
+            goal_wrt_world_homogeneous = self.get_homogeneous_transform(goal_wrt_world_position, np.zeros(3))
+            goal_wrt_robot_homogeneous = world_wrt_robot_homogeneous @ \
+                goal_wrt_world_homogeneous
+
+            robot_position = self.robot_offset
+            goal_position = \
+                self.get_position_from_homogeneous_matrix(goal_wrt_robot_homogeneous)
+            distance_to_goal = np.linalg.norm(goal_position - robot_position)
+
+        else:
+            goal_transformed = self.transform_posestamped(self.goal, self.robot_frame)
+            goal_position = self.get_position_from_posestamped(goal_transformed)
+            robot_position = self.get_position_from_posestamped(self.robot_pose)
+            distance_to_goal = np.linalg.norm(goal_position - robot_position)
 
         if self.verbose:
             self.get_logger().info(f"current state: {self.state}")
-            self.get_logger().info(f"goal transformed: {goal_transformed}")
+            self.get_logger().info(f"goal transformed: {goal_position if self.usePlan else goal_transformed}")
             self.get_logger().info(f"distance to goal: {distance_to_goal}")
             
 
@@ -344,6 +438,9 @@ class PotentialFieldPlanner(Node):
                 #     self.get_logger().info(f"creeping in the direction of travel")
                 #     self.vel_command.linear.x = self.creep_velocity * np.sign(self.vel_command.linear.x)
                 
+                if distance_to_goal < self.SLOW_DOWN_DISTANCE:
+                    self.vel_command.linear.x *= (distance_to_goal / self.SLOW_DOWN_DISTANCE)
+
             else:
                 self.vel_command.linear.x = 0.0
                 self.vel_command.angular.z = 0.0
@@ -351,6 +448,11 @@ class PotentialFieldPlanner(Node):
         
 
         if self.state == self.ALIGN_TO_GOAL:
+            if self.usePlan:
+                self.state = self.IDLE
+
+                return
+
             goal_heading = euler_from_quaternion([
                 goal_transformed.pose.orientation.x,
                 goal_transformed.pose.orientation.y,
