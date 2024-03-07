@@ -44,14 +44,14 @@ class PotentialFieldPlanner(Node):
         self.vel_command = Twist()
 
         # Linear velocity limits
-        self.max_angular_vel = 0.8
-        self.max_linear_vel = 0.5
+        self.max_angular_vel = 0.3
+        self.max_linear_vel = 0.2
         # self.creep_velocity = 0.25
         self.SLOW_DOWN_DISTANCE = 1.0
 
         # Angular velocity limits
-        self.angle_threshold = 0.05
-        self.distance_threshold = 0.25
+        self.angle_threshold = 0.2
+        self.distance_threshold = 0.5
 
         # Set input goal wrt world_frame (odom)
         if userInput:
@@ -110,8 +110,8 @@ class PotentialFieldPlanner(Node):
         self.state = self.INIT
 
         # Constants for velocity field planning
-        self.k_a = 10
-        self.k_r = 0.1
+        self.k_a = 25
+        self.k_r = 0.15
         self.repulsor_threshold = 8.0
 
 
