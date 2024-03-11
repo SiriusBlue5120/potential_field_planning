@@ -41,14 +41,32 @@ class PotentialFieldPlanner(Node):
         # Twist command
         self.vel_command = Twist()
 
-        # Linear velocity limits
-        self.max_angular_vel = 0.3
+        # Velocity limits
         self.max_linear_vel = 0.2
+        # self.max_linear_vel = 0.5
+        self.max_angular_vel = 0.3
+        # self.max_angular_vel = 1.0
         # self.creep_velocity = 0.25
+
+        # Constants for velocity field planning
+        self.k_a = 30
+        self.k_r = 0.15
+        self.repulsor_threshold = 8.0
+
+        # Acceleration limits
+        self.max_linear_acc = 0.2
+        
         self.SLOW_DOWN_DISTANCE = 0.2
+        self.LOOKAHEAD_DISTANCE = 0.5
 
         self.angle_threshold = 0.2
         self.distance_threshold = 0.5
+
+        self.stuck = False
+        self.stuck_check_time = 5.0
+        self.stuck_distance_threshold = self.max_linear_vel * self.stuck_check_time / 16
+        self.previous_robot_wrt_world_position = np.zeros(3)
+        self.previous_stuck_check = time.time()
 
         # Set input goal wrt world_frame (odom)
         if userInput:
@@ -105,14 +123,9 @@ class PotentialFieldPlanner(Node):
 
         self.plan: np.ndarray = None
         self.lookahead_waypoint = None
-        self.LOOKAHEAD_DISTANCE = 0.5
 
-        self.stuck = False
-        self.stuck_check_time = 5.0
-        self.stuck_distance_threshold = self.max_linear_vel / self.stuck_check_time
-        self.previous_robot_wrt_world_position = np.zeros(3)
-        self.previous_time = time.time()
-
+        self.previous_loop_time = None
+        self.previous_vel_command = None
 
         ### TODO: Define states ###
         self.IDLE = 0
@@ -122,11 +135,6 @@ class PotentialFieldPlanner(Node):
 
         # State
         self.state = self.INIT
-
-        # Constants for velocity field planning
-        self.k_a = 30
-        self.k_r = 0.15
-        self.repulsor_threshold = 8.0
 
 
     def plan_callback(self, msg: Path):
@@ -430,12 +438,12 @@ class PotentialFieldPlanner(Node):
             distance_to_goal = np.linalg.norm(goal_position - robot_position)
 
             # Check if stuck
-            if (time.time() - self.previous_time) > self.stuck_check_time:
+            if (time.time() - self.previous_stuck_check) > self.stuck_check_time:
                 if np.linalg.norm(robot_wrt_world_position - self.previous_robot_wrt_world_position) \
                     < self.stuck_distance_threshold:
                     self.stuck = True
 
-                self.previous_time = time.time()
+                self.previous_stuck_check = time.time()
                 self.previous_robot_wrt_world_position = robot_wrt_world_position
 
 
@@ -525,6 +533,31 @@ class PotentialFieldPlanner(Node):
 
                 self.state = self.TRAVEL_TO_GOAL
 
+        # Limiting acceleration
+        if self.previous_loop_time is None:
+            self.previous_loop_time = time.time()
+            self.previous_linear_vel_command = float(self.vel_command.linear.x)
+
+        else:
+            current_time = time.time()
+
+            # self.get_logger().info(f"Velocity: linear x = {self.vel_command.linear.x}")
+
+            diff = self.vel_command.linear.x - self.previous_linear_vel_command
+
+            max_linear_vel_diff = self.max_linear_acc * (current_time - self.previous_loop_time)
+
+            # self.get_logger().info(f"max_linear_vel_diff: linear x = {max_linear_vel_diff}")
+
+            if np.abs(diff) > max_linear_vel_diff:
+                self.vel_command.linear.x = self.previous_linear_vel_command + \
+                    (np.sign(diff) * max_linear_vel_diff)
+                
+                # self.get_logger().info(f"Limited velocity: linear x = {self.vel_command.linear.x}")
+            
+            self.previous_loop_time = current_time
+            self.previous_linear_vel_command = float(self.vel_command.linear.x)
+        # Acceleration limited
 
         # Publish vel_command
         if self.verbose:
