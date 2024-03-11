@@ -8,18 +8,21 @@ import tf_transformations as tf
 # 1)ros2 interface list |grep String;ros2 interface show std_msgs/msg/String
 from geometry_msgs.msg import (PoseStamped, PoseWithCovarianceStamped,
                                TransformStamped, Twist)
-from nav_msgs.msg import Path
+from nav_msgs.msg import Path, OccupancyGrid
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 
 
 class PotentialFieldPlanner(Node):
-    def __init__(self, userInput=False, usePlan=True, behavior=False):
+    def __init__(self, pose_topic="/pose", userInput=False, usePlan=True, behavior=False):
         super().__init__(node_name="pf_planner")
 
         # Path source
         self.usePlan = usePlan
         self.behavior = behavior
+
+        # self.get_logger().info(f"Parameters: usePlan: {self.usePlan}"\
+                            #    +f" behavior: {self.behavior}")
 
         # Logging
         self.verbose = False
@@ -42,21 +45,21 @@ class PotentialFieldPlanner(Node):
         self.vel_command = Twist()
 
         # Velocity limits
-        self.max_linear_vel = 0.2
+        self.max_linear_vel = 0.25
         # self.max_linear_vel = 0.5
-        self.max_angular_vel = 0.3
+        self.max_angular_vel = 0.4
         # self.max_angular_vel = 1.0
         # self.creep_velocity = 0.25
 
         # Constants for velocity field planning
         self.k_a = 30
-        self.k_r = 0.15
+        self.k_r = 0.1
         self.repulsor_threshold = 8.0
 
         # Acceleration limits
-        self.max_linear_acc = 0.2
+        self.max_linear_acc = 0.25
         
-        self.SLOW_DOWN_DISTANCE = 0.2
+        self.SLOW_DOWN_DISTANCE = 0.3
         self.LOOKAHEAD_DISTANCE = 0.5
 
         self.angle_threshold = 0.2
@@ -64,9 +67,11 @@ class PotentialFieldPlanner(Node):
 
         self.stuck = False
         self.stuck_check_time = 5.0
-        self.stuck_distance_threshold = self.max_linear_vel * self.stuck_check_time / 16
+        self.stuck_distance_threshold = self.max_linear_vel * self.stuck_check_time / 8
         self.previous_robot_wrt_world_position = np.zeros(3)
         self.previous_stuck_check = time.time()
+
+        self.POSE_TOPIC = pose_topic
 
         # Set input goal wrt world_frame (odom)
         if userInput:
@@ -100,10 +105,17 @@ class PotentialFieldPlanner(Node):
                     LaserScan, "/scan",
                     self.process_scan,
                     10)
+            
+            self.map_subscriber = self.create_subscription(
+                OccupancyGrid,
+                "/map",
+                self.map_callback,
+                qos_profile=rclpy.qos.qos_profile_sensor_data,
+            ) if self.usePlan else None
 
             self.pose_subscriber = self.create_subscription(
                 PoseWithCovarianceStamped,
-                "/pose",
+                self.POSE_TOPIC,
                 self.pose_callback,
                 10
             ) if self.usePlan else None
@@ -135,6 +147,13 @@ class PotentialFieldPlanner(Node):
 
         # State
         self.state = self.INIT
+
+
+    def map_callback(self, msg: OccupancyGrid):
+
+        pass
+
+        return
 
 
     def plan_callback(self, msg: Path):
@@ -419,7 +438,7 @@ class PotentialFieldPlanner(Node):
             return
 
         if self.usePlan:
-            if self.plan is None:
+            if self.plan is None or not self.plan.shape[0]:
                 return
 
             robot_wrt_world_position = self.get_position_from_posestamped(self.robot_pose)
@@ -436,6 +455,8 @@ class PotentialFieldPlanner(Node):
             goal_position = \
                 self.get_position_from_homogeneous_matrix(goal_wrt_robot_homogeneous)
             distance_to_goal = np.linalg.norm(goal_position - robot_position)
+
+            # self.get_logger().info(f"distance_to_goal: {distance_to_goal}")
 
             # Check if stuck
             if (time.time() - self.previous_stuck_check) > self.stuck_check_time:
@@ -529,6 +550,8 @@ class PotentialFieldPlanner(Node):
 
 
         if self.state == self.IDLE:
+            self.zero_velocity()
+
             if distance_to_goal > self.distance_threshold:
 
                 self.state = self.TRAVEL_TO_GOAL
