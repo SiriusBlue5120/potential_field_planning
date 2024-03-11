@@ -45,7 +45,7 @@ class PotentialFieldPlanner(Node):
         self.vel_command = Twist()
 
         # Velocity limits
-        self.max_linear_vel = 0.25
+        self.max_linear_vel = 0.2
         # self.max_linear_vel = 0.5
         self.max_angular_vel = 0.4
         # self.max_angular_vel = 1.0
@@ -57,7 +57,7 @@ class PotentialFieldPlanner(Node):
         self.repulsor_threshold = 8.0
 
         # Acceleration limits
-        self.max_linear_acc = 0.25
+        self.max_linear_acc = 0.2
         
         self.SLOW_DOWN_DISTANCE = 0.3
         self.LOOKAHEAD_DISTANCE = 0.5
