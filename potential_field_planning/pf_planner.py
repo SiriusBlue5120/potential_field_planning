@@ -14,19 +14,22 @@ from sensor_msgs.msg import LaserScan
 
 
 class PotentialFieldPlanner(Node):
-    def __init__(self, userInput=False, usePlan=True, behavior=False):
+    def __init__(self, pose_topic="/pose", userInput=False, use_plan=True, behavior=False):
         super().__init__(node_name="pf_planner")
 
         # Path source
-        self.usePlan = usePlan
+        self.use_plan = use_plan
         self.behavior = behavior
+
+        # self.get_logger().info(f"Parameters: use_plan: {self.use_plan}"\
+                            #    +f" behavior: {self.behavior}")
 
         # Logging
         self.verbose = False
 
         # Set frames
         self.robot_frame = 'base_link'
-        self.world_frame = 'map' if usePlan else 'odom'
+        self.world_frame = 'map' if use_plan else 'odom'
         self.laser_frame = 'base_laser_front_link'
         self.robot_offset = np.zeros(3)
 
@@ -41,14 +44,34 @@ class PotentialFieldPlanner(Node):
         # Twist command
         self.vel_command = Twist()
 
-        # Linear velocity limits
-        self.max_angular_vel = 0.3
+        # Velocity limits
         self.max_linear_vel = 0.2
+        # self.max_linear_vel = 0.5
+        self.max_angular_vel = 0.4
+        # self.max_angular_vel = 1.0
         # self.creep_velocity = 0.25
-        self.SLOW_DOWN_DISTANCE = 0.2
+
+        # Constants for velocity field planning
+        self.k_a = 30
+        self.k_r = 0.1
+        self.repulsor_threshold = 8.0
+
+        # Acceleration limits
+        self.max_linear_acc = 0.2
+
+        self.SLOW_DOWN_DISTANCE = 0.3
+        self.LOOKAHEAD_DISTANCE = 0.5
 
         self.angle_threshold = 0.2
         self.distance_threshold = 0.5
+
+        self.stuck = False
+        self.stuck_check_time = 5.0
+        self.stuck_distance_threshold = self.max_linear_vel * self.stuck_check_time / 8
+        self.previous_robot_wrt_world_position = np.zeros(3)
+        self.previous_stuck_check = time.time()
+
+        self.POSE_TOPIC = pose_topic
 
         # Set input goal wrt world_frame (odom)
         if userInput:
@@ -85,10 +108,10 @@ class PotentialFieldPlanner(Node):
 
             self.pose_subscriber = self.create_subscription(
                 PoseWithCovarianceStamped,
-                "/pose",
+                self.POSE_TOPIC,
                 self.pose_callback,
                 10
-            ) if self.usePlan else None
+            ) if self.use_plan else None
 
             # Path subscriber
             self.plan_subscriber = self.create_subscription(
@@ -96,7 +119,7 @@ class PotentialFieldPlanner(Node):
                 "/plan",
                 self.plan_callback,
                 10
-            ) if self.usePlan else None
+            ) if self.use_plan else None
         else:
             self.static_laser_transform: TransformStamped = None
 
@@ -105,14 +128,9 @@ class PotentialFieldPlanner(Node):
 
         self.plan: np.ndarray = None
         self.lookahead_waypoint = None
-        self.LOOKAHEAD_DISTANCE = 0.5
 
-        self.stuck = False
-        self.stuck_check_time = 5.0
-        self.stuck_distance_threshold = self.max_linear_vel / self.stuck_check_time
-        self.previous_robot_wrt_world_position = np.zeros(3)
-        self.previous_time = time.time()
-
+        self.previous_loop_time = None
+        self.previous_vel_command = None
 
         ### TODO: Define states ###
         self.IDLE = 0
@@ -122,11 +140,6 @@ class PotentialFieldPlanner(Node):
 
         # State
         self.state = self.INIT
-
-        # Constants for velocity field planning
-        self.k_a = 30
-        self.k_r = 0.15
-        self.repulsor_threshold = 8.0
 
 
     def plan_callback(self, msg: Path):
@@ -410,8 +423,8 @@ class PotentialFieldPlanner(Node):
         if not self.lidar_init:
             return
 
-        if self.usePlan:
-            if self.plan is None:
+        if self.use_plan:
+            if self.plan is None or not self.plan.shape[0]:
                 return
 
             robot_wrt_world_position = self.get_position_from_posestamped(self.robot_pose)
@@ -429,13 +442,15 @@ class PotentialFieldPlanner(Node):
                 self.get_position_from_homogeneous_matrix(goal_wrt_robot_homogeneous)
             distance_to_goal = np.linalg.norm(goal_position - robot_position)
 
+            # self.get_logger().info(f"distance_to_goal: {distance_to_goal}")
+
             # Check if stuck
-            if (time.time() - self.previous_time) > self.stuck_check_time:
+            if (time.time() - self.previous_stuck_check) > self.stuck_check_time:
                 if np.linalg.norm(robot_wrt_world_position - self.previous_robot_wrt_world_position) \
                     < self.stuck_distance_threshold:
                     self.stuck = True
 
-                self.previous_time = time.time()
+                self.previous_stuck_check = time.time()
                 self.previous_robot_wrt_world_position = robot_wrt_world_position
 
 
@@ -447,7 +462,7 @@ class PotentialFieldPlanner(Node):
 
         if self.verbose:
             self.get_logger().info(f"current state: {self.state}")
-            self.get_logger().info(f"goal transformed: {goal_position if self.usePlan else goal_transformed}")
+            self.get_logger().info(f"goal transformed: {goal_position if self.use_plan else goal_transformed}")
             self.get_logger().info(f"distance to goal: {distance_to_goal}")
 
 
@@ -496,7 +511,7 @@ class PotentialFieldPlanner(Node):
 
 
         if self.state == self.ALIGN_TO_GOAL:
-            if self.usePlan:
+            if self.use_plan:
                 self.state = self.IDLE
 
                 return
@@ -521,10 +536,37 @@ class PotentialFieldPlanner(Node):
 
 
         if self.state == self.IDLE:
+            self.zero_velocity()
+
             if distance_to_goal > self.distance_threshold:
 
                 self.state = self.TRAVEL_TO_GOAL
 
+        # Limiting acceleration
+        if self.previous_loop_time is None:
+            self.previous_loop_time = time.time()
+            self.previous_linear_vel_command = float(self.vel_command.linear.x)
+
+        else:
+            current_time = time.time()
+
+            # self.get_logger().info(f"Velocity: linear x = {self.vel_command.linear.x}")
+
+            diff = self.vel_command.linear.x - self.previous_linear_vel_command
+
+            max_linear_vel_diff = self.max_linear_acc * (current_time - self.previous_loop_time)
+
+            # self.get_logger().info(f"max_linear_vel_diff: linear x = {max_linear_vel_diff}")
+
+            if np.abs(diff) > max_linear_vel_diff:
+                self.vel_command.linear.x = self.previous_linear_vel_command + \
+                    (np.sign(diff) * max_linear_vel_diff)
+
+                # self.get_logger().info(f"Limited velocity: linear x = {self.vel_command.linear.x}")
+
+            self.previous_loop_time = current_time
+            self.previous_linear_vel_command = float(self.vel_command.linear.x)
+        # Acceleration limited
 
         # Publish vel_command
         if self.verbose:
