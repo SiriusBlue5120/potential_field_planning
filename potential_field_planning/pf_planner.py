@@ -105,13 +105,6 @@ class PotentialFieldPlanner(Node):
                     LaserScan, "/scan",
                     self.process_scan,
                     10)
-            
-            self.map_subscriber = self.create_subscription(
-                OccupancyGrid,
-                "/map",
-                self.map_callback,
-                qos_profile=rclpy.qos.qos_profile_sensor_data,
-            ) if self.usePlan else None
 
             self.pose_subscriber = self.create_subscription(
                 PoseWithCovarianceStamped,
@@ -147,13 +140,6 @@ class PotentialFieldPlanner(Node):
 
         # State
         self.state = self.INIT
-
-
-    def map_callback(self, msg: OccupancyGrid):
-
-        pass
-
-        return
 
 
     def plan_callback(self, msg: Path):
