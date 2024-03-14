@@ -8,20 +8,20 @@ import tf_transformations as tf
 # 1)ros2 interface list |grep String;ros2 interface show std_msgs/msg/String
 from geometry_msgs.msg import (PoseStamped, PoseWithCovarianceStamped,
                                TransformStamped, Twist)
-from nav_msgs.msg import Path, OccupancyGrid
+from nav_msgs.msg import Path
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 
 
 class PotentialFieldPlanner(Node):
-    def __init__(self, pose_topic="/pose", userInput=False, usePlan=True, behavior=False):
+    def __init__(self, pose_topic="/pose", userInput=False, use_plan=True, behavior=False):
         super().__init__(node_name="pf_planner")
 
         # Path source
-        self.usePlan = usePlan
+        self.use_plan = use_plan
         self.behavior = behavior
 
-        # self.get_logger().info(f"Parameters: usePlan: {self.usePlan}"\
+        # self.get_logger().info(f"Parameters: use_plan: {self.use_plan}"\
                             #    +f" behavior: {self.behavior}")
 
         # Logging
@@ -29,7 +29,7 @@ class PotentialFieldPlanner(Node):
 
         # Set frames
         self.robot_frame = 'base_link'
-        self.world_frame = 'map' if usePlan else 'odom'
+        self.world_frame = 'map' if use_plan else 'odom'
         self.laser_frame = 'base_laser_front_link'
         self.robot_offset = np.zeros(3)
 
@@ -58,7 +58,7 @@ class PotentialFieldPlanner(Node):
 
         # Acceleration limits
         self.max_linear_acc = 0.2
-        
+
         self.SLOW_DOWN_DISTANCE = 0.3
         self.LOOKAHEAD_DISTANCE = 0.5
 
@@ -111,7 +111,7 @@ class PotentialFieldPlanner(Node):
                 self.POSE_TOPIC,
                 self.pose_callback,
                 10
-            ) if self.usePlan else None
+            ) if self.use_plan else None
 
             # Path subscriber
             self.plan_subscriber = self.create_subscription(
@@ -119,7 +119,7 @@ class PotentialFieldPlanner(Node):
                 "/plan",
                 self.plan_callback,
                 10
-            ) if self.usePlan else None
+            ) if self.use_plan else None
         else:
             self.static_laser_transform: TransformStamped = None
 
@@ -423,7 +423,7 @@ class PotentialFieldPlanner(Node):
         if not self.lidar_init:
             return
 
-        if self.usePlan:
+        if self.use_plan:
             if self.plan is None or not self.plan.shape[0]:
                 return
 
@@ -462,7 +462,7 @@ class PotentialFieldPlanner(Node):
 
         if self.verbose:
             self.get_logger().info(f"current state: {self.state}")
-            self.get_logger().info(f"goal transformed: {goal_position if self.usePlan else goal_transformed}")
+            self.get_logger().info(f"goal transformed: {goal_position if self.use_plan else goal_transformed}")
             self.get_logger().info(f"distance to goal: {distance_to_goal}")
 
 
@@ -511,7 +511,7 @@ class PotentialFieldPlanner(Node):
 
 
         if self.state == self.ALIGN_TO_GOAL:
-            if self.usePlan:
+            if self.use_plan:
                 self.state = self.IDLE
 
                 return
@@ -561,9 +561,9 @@ class PotentialFieldPlanner(Node):
             if np.abs(diff) > max_linear_vel_diff:
                 self.vel_command.linear.x = self.previous_linear_vel_command + \
                     (np.sign(diff) * max_linear_vel_diff)
-                
+
                 # self.get_logger().info(f"Limited velocity: linear x = {self.vel_command.linear.x}")
-            
+
             self.previous_loop_time = current_time
             self.previous_linear_vel_command = float(self.vel_command.linear.x)
         # Acceleration limited
